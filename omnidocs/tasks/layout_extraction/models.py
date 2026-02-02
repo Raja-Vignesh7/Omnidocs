@@ -11,8 +11,10 @@ Coordinate Systems:
     to convert to normalized coordinates.
 
 Example:
-    >>> result = extractor.extract(image)  # Returns absolute pixel coordinates
-    >>> normalized = result.get_normalized_bboxes()  # Returns 0-1024 normalized coords
+    ```python
+    result = extractor.extract(image)  # Returns absolute pixel coordinates
+    normalized = result.get_normalized_bboxes()  # Returns 0-1024 normalized coords
+    ```
 """
 
 from enum import Enum
@@ -60,6 +62,77 @@ class LayoutLabel(str, Enum):
     # Other
     ABANDON = "abandon"  # Elements to ignore (watermarks, artifacts, etc.)
     UNKNOWN = "unknown"
+
+
+# ============= Custom Label Definition =============
+
+
+class CustomLabel(BaseModel):
+    """
+    Type-safe custom layout label definition for VLM-based models.
+
+    VLM models like Qwen3-VL support flexible custom labels beyond the
+    standard LayoutLabel enum. Use this class to define custom labels
+    with validation.
+
+    Example:
+        ```python
+        from omnidocs.tasks.layout_extraction import CustomLabel
+
+        # Simple custom label
+        code_block = CustomLabel(name="code_block")
+
+        # With metadata
+        sidebar = CustomLabel(
+                name="sidebar",
+                description="Secondary content panel",
+                color="#9B59B6",
+            )
+
+        # Use with QwenLayoutDetector
+        result = detector.extract(image, custom_labels=[code_block, sidebar])
+        ```
+    """
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Label identifier (e.g., 'code_block', 'sidebar'). Must be non-empty and reasonably short.",
+    )
+    description: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="Human-readable description of what this label represents.",
+    )
+    color: Optional[str] = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Visualization color as hex string (e.g., '#9B59B6'). Used by visualize() method if provided.",
+    )
+    detection_prompt: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Optional custom prompt hint to improve detection accuracy.",
+    )
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    def __str__(self) -> str:
+        """Return the label name as string."""
+        return self.name
+
+    def __hash__(self) -> int:
+        """Make hashable for use in sets."""
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> bool:
+        """Compare by name."""
+        if isinstance(other, CustomLabel):
+            return self.name == other.name
+        if isinstance(other, str):
+            return self.name == other
+        return NotImplemented
 
 
 # ============= Label Mapping Definitions =============
@@ -256,9 +329,11 @@ class BoundingBox(BaseModel):
             New BoundingBox with coordinates in 0-1024 range
 
         Example:
-            >>> bbox = BoundingBox(x1=100, y1=50, x2=500, y2=300)
-            >>> normalized = bbox.to_normalized(1000, 800)
-            >>> # x: 100/1000*1024 = 102.4, y: 50/800*1024 = 64
+            ```python
+            bbox = BoundingBox(x1=100, y1=50, x2=500, y2=300)
+            normalized = bbox.to_normalized(1000, 800)
+            # x: 100/1000*1024 = 102.4, y: 50/800*1024 = 64
+            ```
         """
         return BoundingBox(
             x1=self.x1 / image_width * NORMALIZED_SIZE,
@@ -411,10 +486,12 @@ class LayoutOutput(BaseModel):
             List of dicts with normalized bbox coordinates and metadata.
 
         Example:
-            >>> result = extractor.extract(image)
-            >>> normalized = result.get_normalized_bboxes()
-            >>> for box in normalized:
-            ...     print(f"{box['label']}: {box['bbox']}")  # coords in 0-1024 range
+            ```python
+            result = extractor.extract(image)
+            normalized = result.get_normalized_bboxes()
+            for box in normalized:
+                    print(f"{box['label']}: {box['bbox']}")  # coords in 0-1024 range
+            ```
         """
         normalized = []
         for box in self.bboxes:
@@ -457,9 +534,11 @@ class LayoutOutput(BaseModel):
             PIL Image with visualizations drawn
 
         Example:
-            >>> result = extractor.extract(image)
-            >>> viz = result.visualize(image, output_path="layout_viz.png")
-            >>> viz.show()  # Display in notebook/viewer
+            ```python
+            result = extractor.extract(image)
+            viz = result.visualize(image, output_path="layout_viz.png")
+            viz.show()  # Display in notebook/viewer
+            ```
         """
         from PIL import ImageDraw
 
@@ -502,3 +581,66 @@ class LayoutOutput(BaseModel):
             viz_image.save(output_path)
 
         return viz_image
+
+    @classmethod
+    def load_json(cls, file_path: Union[str, Path]) -> "LayoutOutput":
+        """
+        Load a LayoutOutput instance from a JSON file.
+
+        Reads a JSON file and deserializes its contents into a LayoutOutput object.
+        Uses Pydantic's model_validate_json for proper handling of nested objects.
+
+        Args:
+            file_path: Path to JSON file containing serialized LayoutOutput data.
+                      Can be string or pathlib.Path object.
+
+        Returns:
+            LayoutOutput: Deserialized layout output instance from file.
+
+        Raises:
+            FileNotFoundError: If the specified file does not exist.
+            UnicodeDecodeError: If file cannot be decoded as UTF-8.
+            ValueError: If file contents are not valid JSON.
+            ValidationError: If JSON data doesn't match LayoutOutput schema.
+
+        Example:
+            ```python
+            output = LayoutOutput.load_json('layout_results.json')
+            print(f"Found {output.element_count} elements")
+            ```
+            Found 5 elements
+        """
+        path = Path(file_path)
+        return cls.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def save_json(self, file_path: Union[str, Path]) -> None:
+        """
+        Save LayoutOutput instance to a JSON file.
+
+        Serializes the LayoutOutput object to JSON and writes it to a file.
+        Automatically creates parent directories if they don't exist. Uses UTF-8
+        encoding for compatibility and proper handling of special characters.
+
+        Args:
+            file_path: Path where JSON file should be saved. Can be string or
+                      pathlib.Path object. Parent directories will be created
+                      if they don't exist.
+
+        Returns:
+            None
+
+        Raises:
+            OSError: If file cannot be written due to permission or disk errors.
+            TypeError: If file_path is not a string or Path object.
+
+        Example:
+            ```python
+            output = LayoutOutput(bboxes=[], image_width=800, image_height=600)
+            output.save_json('results/layout_output.json')
+            # File is created at results/layout_output.json
+            # Parent 'results' directory is created if it didn't exist
+            ```
+        """
+        path = Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(), encoding="utf-8")

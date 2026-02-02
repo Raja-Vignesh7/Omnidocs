@@ -335,6 +335,58 @@ class TestLayoutOutput:
         assert len(d["bboxes"]) == 1
         assert d["labels_found"] == ["title"]
 
+    def test_layout_save_json(self, tmp_path):
+        """Test saving LayoutOutput to JSON file."""
+        boxes = [
+            LayoutBox(
+                label=LayoutLabel.TITLE,
+                bbox=BoundingBox(x1=0, y1=0, x2=100, y2=50),
+                confidence=0.9,
+            ),
+        ]
+        output = LayoutOutput(
+            bboxes=boxes,
+            image_width=800,
+            image_height=600,
+            model_name="TestModel",
+        )
+        json_path = tmp_path / "test_layout_output.json"
+        output.save_json(json_path)
+
+        # Read back the file and check contents
+        with open(json_path, "r") as f:
+            content = f.read()
+            assert "image_width" in content
+            assert "image_height" in content
+            assert "model_name" in content
+            assert "bboxes" in content
+
+    def test_layout_load_json(self, tmp_path):
+        """Test loading LayoutOutput from JSON file."""
+        boxes = [
+            LayoutBox(
+                label=LayoutLabel.TITLE,
+                bbox=BoundingBox(x1=0, y1=0, x2=100, y2=50),
+                confidence=0.9,
+            ),
+        ]
+        output = LayoutOutput(
+            bboxes=boxes,
+            image_width=800,
+            image_height=600,
+            model_name="TestModel",
+        )
+        json_path = tmp_path / "test_layout_output.json"
+        output.save_json(json_path)
+
+        new_output = LayoutOutput.load_json(json_path)
+
+        assert new_output.image_width == output.image_width
+        assert new_output.image_height == output.image_height
+        assert new_output.model_name == output.model_name
+        assert new_output.element_count == output.element_count
+        assert len(new_output.bboxes) == len(output.bboxes)
+
 
 class TestDocLayoutYOLOClassNames:
     """Tests for DocLayout-YOLO class names mapping."""
@@ -528,10 +580,11 @@ class TestLayoutOutputVisualize:
 
     def test_visualize_does_not_modify_original(self):
         """Test that visualize doesn't modify the original image."""
+        import numpy as np
         from PIL import Image
 
         test_image = Image.new("RGB", (100, 100), color="white")
-        original_pixels = list(test_image.getdata())
+        original_pixels = np.array(test_image).copy()
 
         boxes = [
             LayoutBox(
@@ -545,7 +598,7 @@ class TestLayoutOutputVisualize:
         _ = output.visualize(test_image)
 
         # Original should be unchanged
-        assert list(test_image.getdata()) == original_pixels
+        assert np.array_equal(np.array(test_image), original_pixels)
 
     def test_visualize_saves_to_path(self, tmp_path):
         """Test that visualize can save to a file path."""

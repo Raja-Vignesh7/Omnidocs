@@ -1,0 +1,148 @@
+# Roadmap
+
+**Status**: ✅ Done | 🚧 WIP | 🔜 Soon | ❌ N/A
+
+---
+
+## Text Extraction Models
+
+| Model | Params | PyTorch | VLLM | MLX | API |
+|-------|--------|---------|------|-----|-----|
+| **Qwen3-VL** | 2-32B | ✅ | ✅ | ✅ | ✅ |
+| **DotsOCR** | 1.7B | ✅ | ✅ | ❌ | ❌ |
+| LightOnOCR-2 | 1B | 🔜 | 🔜 | ❌ | ❌ |
+| Chandra | 9B | 🔜 | 🔜 | ❌ | ❌ |
+| olmOCR-2 | 7B | 🔜 | 🔜 | ❌ | 🔜 |
+| MinerU2.5 | 1.2B | 🔜 | 🔜 | 🔜 | ❌ |
+| Granite-Docling | 258M | 🔜 | ❌ | 🔜 | ❌ |
+| DeepSeek-OCR-2 | 3B | 🔜 | 🔜 | 🔜 | 🔜 |
+| PaddleOCR-VL | 900M | 🔜 | ❌ | ❌ | ❌ |
+| OCRFlux | 3B | 🔜 | 🔜 | ❌ | ❌ |
+
+---
+
+## Layout Analysis Models
+
+| Model | Params | PyTorch | VLLM | MLX | API |
+|-------|--------|---------|------|-----|-----|
+| **DocLayoutYOLO** | - | ✅ | ❌ | ❌ | ❌ |
+| **RT-DETR** | - | ✅ | ❌ | ❌ | ❌ |
+| **Qwen Layout** | 2-32B | ✅ | ✅ | ✅ | ✅ |
+| Surya Layout | - | 🔜 | ❌ | ❌ | ❌ |
+| Florence-2 | - | 🔜 | ❌ | ❌ | 🔜 |
+| LayoutLMv3 | - | 🔜 | ❌ | ❌ | ❌ |
+| DiT | - | 🔜 | ❌ | ❌ | ❌ |
+
+---
+
+## OCR Models
+
+| Model | Params | PyTorch | VLLM | MLX | API |
+|-------|--------|---------|------|-----|-----|
+| **Tesseract** | - | ✅ | ❌ | ❌ | ❌ |
+| **EasyOCR** | - | ✅ | ❌ | ❌ | ❌ |
+| **PaddleOCR** | - | ✅ | ❌ | ❌ | ❌ |
+| Surya OCR | - | 🔜 | ❌ | ❌ | ❌ |
+| GOT-OCR2 | 700M | 🔜 | ❌ | ❌ | ❌ |
+
+---
+
+## Table Extraction Models
+
+| Model | Params | PyTorch | VLLM | MLX | API |
+|-------|--------|---------|------|-----|-----|
+| TableTransformer | - | 🔜 | ❌ | ❌ | ❌ |
+| TableFormer | - | 🔜 | ❌ | ❌ | ❌ |
+| Surya-Table | - | 🔜 | ❌ | ❌ | ❌ |
+
+---
+
+## Tasks
+
+| Task | Status |
+|------|--------|
+| Document Loading | ✅ |
+| Text Extraction | ✅ |
+| Layout Analysis | ✅ |
+| OCR Extraction | ✅ |
+| Table Extraction | 🔜 |
+| Math Recognition | 🔜 |
+| Structured Output | 🔜 |
+| Chart Understanding | 🔜 |
+
+---
+
+## Infrastructure
+
+| Component | Status |
+|-----------|--------|
+| Document class | ✅ |
+| Pydantic configs | ✅ |
+| Multi-backend | ✅ |
+| Batch processing | ✅ |
+| Modal deployment | ✅ |
+
+---
+
+## Under Consideration
+
+Models being evaluated for future integration:
+
+### High Priority
+| Model | Use Case | Why |
+|-------|----------|-----|
+| **Nanonets-OCR2** | LaTeX + structured | Good formula recognition |
+| **Marker** | Full pipeline | Uses Surya, good tables |
+| **Granite Vision 3.3** | Document understanding | IBM, good charts |
+
+### Specialized Use Cases
+| Use Case | Models Under Review |
+|----------|---------------------|
+| Handwriting | TrOCR, Surya |
+| Scientific Papers | Nougat, Marker |
+| Asian Languages | PaddleOCR-VL (109 langs) |
+| Edge/Mobile | Granite-Docling (258M) |
+| Forms & Receipts | DeepSeek-OCR-2 |
+| Multi-column | MinerU2.5 |
+
+### Framework Integration
+| Framework | Status |
+|-----------|--------|
+| deepdoctection | 🔜 |
+| Docling | 🔜 |
+| Marker | 🔜 |
+
+---
+
+## Benchmarks Reference
+
+### OlmOCR-Bench (Higher = Better)
+| Model | Score | Params |
+|-------|-------|--------|
+| LightOnOCR-2 | 83.2 | 1B |
+| Chandra | 83.1 | 9B |
+| olmOCR-2 | 82.4 | 7B |
+| DotsOCR | 79.1 | 1.7B |
+| DeepSeek-OCR | 75.4 | 3B |
+
+### Speed (Pages/Second on H100)
+| Model | Speed |
+|-------|-------|
+| LightOnOCR-2 | 5.7 |
+| PaddleOCR-VL | 3.3 |
+| DeepSeek-OCR | 2.3 |
+
+---
+
+## Next Up
+
+1. 🔜 **LightOnOCR-2** - Fastest + SOTA accuracy
+2. 🔜 **DeepSeek-OCR-2** - New visual encoder (Jan 2026)
+3. 🔜 **Table Extraction** - TableTransformer
+4. 🔜 **Surya** - Multi-language OCR + Layout
+
+---
+
+For detailed model specs, see [ROADMAP_DETAILED.md](ROADMAP_DETAILED.md).
+
+**Last Updated**: February 2026

@@ -7,7 +7,10 @@
   <a href="https://pypi.org/project/omnidocs/"><img src="https://img.shields.io/pypi/v/omnidocs.svg" alt="PyPI version"></a>
   <a href="https://github.com/adithya-s-k/OmniDocs/blob/main/LICENSE"><img src="https://img.shields.io/github/license/adithya-s-k/OmniDocs" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
+  <!-- [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/adithya-s-k/Omnidocs) -->
+<a href="https://deepwiki.com/adithya-s-k/Omnidocs"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
+
 
 **OmniDocs** is your all-in-one Python toolkit for extracting layout, tables, text, math, and OCR from PDFs and images, powered by classic libraries and state-of-the-art deep learning models. Build robust document workflows with a single, consistent API.
 
@@ -40,6 +43,29 @@ for box in result.bboxes:
 result.visualize(doc.get_page(0), output_path="layout.png")
 ```
 
+### Text Extraction with VLM
+
+```python
+from omnidocs import Document
+from omnidocs.tasks.text_extraction import QwenTextExtractor
+from omnidocs.tasks.text_extraction.qwen import QwenTextPyTorchConfig
+
+# Load document
+doc = Document.from_pdf("report.pdf")
+
+# Initialize VLM text extractor
+extractor = QwenTextExtractor(
+    backend=QwenTextPyTorchConfig(
+        model="Qwen/Qwen3-VL-8B-Instruct",
+        device="cuda",
+    )
+)
+
+# Extract as markdown
+result = extractor.extract(doc.get_page(0), output_format="markdown")
+print(result.content)
+```
+
 ---
 
 ## Installation
@@ -62,6 +88,100 @@ Choose your preferred method:
   cd Omnidocs
   uv sync
   ```
+
+### Optional: Flash Attention Installation
+
+Some models (especially VLM-based extractors with PyTorch backend) benefit from **Flash Attention 2** for faster inference. Flash Attention installation is **optional** but recommended for production deployments.
+
+> **⚠️ Important**: Flash Attention is sensitive to Python, PyTorch, and CUDA versions. Choose the installation method that matches your environment.
+
+#### Requirements
+- **CUDA**: 11.8 or higher (12.3+ recommended for FA3)
+- **PyTorch**: 2.0 or higher
+- **Python**: 3.10-3.12
+- **GPU**: NVIDIA GPU with compute capability 7.0+ (V100, A100, H100, RTX 3090, etc.)
+- **Linux**: Tested on Ubuntu 20.04+, may work on other distributions
+
+#### Installation Methods
+
+**Option 1: Pre-built Wheels (Recommended - No Compilation)**
+
+Fastest method, avoids compilation. Download the matching wheel from [Flash Attention Releases](https://github.com/Dao-AILab/flash-attention/releases):
+
+```bash
+# Example for Python 3.12, CUDA 12, PyTorch 2.5
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
+```
+
+Choose the wheel matching:
+- `cp312` = Python 3.12 (cp311 for 3.11, cp310 for 3.10)
+- `cu12` = CUDA 12.x (cu118 for CUDA 11.8)
+- `torch2.5` = PyTorch 2.5.x
+
+**Option 2: pip Install from PyPI (Compiles from source)**
+
+Requires CUDA toolkit and compiler:
+
+```bash
+pip install flash-attn --no-build-isolation
+```
+
+To speed up compilation (uses 4 CPU cores):
+
+```bash
+MAX_JOBS=4 pip install flash-attn --no-build-isolation
+```
+
+**Option 3: Install from Source (Most Control)**
+
+```bash
+git clone https://github.com/Dao-AILab/flash-attention.git
+cd flash-attention
+pip install ninja  # Faster build system
+python setup.py install
+```
+
+#### Verification
+
+Test that Flash Attention installed correctly:
+
+```python
+import torch
+from flash_attn import flash_attn_func
+
+print(f"Flash Attention installed: {flash_attn_func is not None}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+```
+
+#### Troubleshooting
+
+**Import Error or Symbol Mismatch**
+- Ensure PyTorch, CUDA, and flash-attn versions are compatible
+- Try reinstalling with matching pre-built wheel
+- Check: `python -c "import torch; print(torch.version.cuda)"`
+
+**Compilation Fails**
+- Install CUDA toolkit: `sudo apt install nvidia-cuda-toolkit`
+- Install build tools: `sudo apt install build-essential ninja-build`
+- Use pre-built wheels instead (Option 1)
+
+**VLLM Alternative**
+If Flash Attention installation fails, use VLLM backend instead (includes optimized attention):
+
+```python
+from omnidocs.tasks.text_extraction import DotsOCRTextExtractor
+from omnidocs.tasks.text_extraction.dotsocr import DotsOCRVLLMConfig
+
+# VLLM includes optimized attention out of the box
+extractor = DotsOCRTextExtractor(
+    backend=DotsOCRVLLMConfig(model="rednote-hilab/dots.ocr")
+)
+```
+
+**References:**
+- [Flash Attention GitHub](https://github.com/Dao-AILab/flash-attention)
+- [Installation Guide](https://github.com/Dao-AILab/flash-attention#installation-and-features)
+- [Pre-built Wheels](https://github.com/Dao-AILab/flash-attention/releases)
 
 ---
 
@@ -88,35 +208,169 @@ doc = Document.from_images(["p1.png", "p2.png"])
 ### Layout Extraction
 Detect document structure with multiple backends:
 
-| Model | Description | Classes |
+| Model | Description | Backend |
 |-------|-------------|---------|
-| **DocLayoutYOLO** | YOLO-based detector (fast, accurate) | 10 |
-| **RT-DETR** | Transformer-based detector | 17+ |
+| **DocLayoutYOLO** | YOLO-based detector (fast, accurate) | PyTorch |
+| **RT-DETR** | Transformer-based detector | PyTorch |
+| **QwenLayoutDetector** | VLM-based with custom labels | PyTorch, VLLM, MLX, API |
 
 ```python
-from omnidocs.tasks.layout_extraction import DocLayoutYOLO, RTDETRLayoutExtractor
+from omnidocs.tasks.layout_extraction import DocLayoutYOLO, DocLayoutYOLOConfig
 
-# DocLayoutYOLO (fast)
+# DocLayoutYOLO (fast, fixed labels)
 layout = DocLayoutYOLO(config=DocLayoutYOLOConfig(device="cuda"))
-
-# RT-DETR (more categories)
-layout = RTDETRLayoutExtractor(config=RTDETRConfig(device="cuda"))
-
 result = layout.extract(image)
 
 # Filter by label
 tables = result.filter_by_label(LayoutLabel.TABLE)
 figures = result.filter_by_label(LayoutLabel.FIGURE)
+```
 
-# Get normalized coordinates (0-1024 range)
-normalized = result.get_normalized_bboxes()
+#### Custom Labels with Qwen-VL
+Define your own document element categories:
+
+```python
+from omnidocs.tasks.layout_extraction import QwenLayoutDetector, CustomLabel
+from omnidocs.tasks.layout_extraction.qwen import QwenLayoutPyTorchConfig
+
+# Initialize with PyTorch backend
+detector = QwenLayoutDetector(
+    backend=QwenLayoutPyTorchConfig(
+        model="Qwen/Qwen3-VL-8B-Instruct",
+        device="cuda",
+    )
+)
+
+# Define custom labels for your domain
+custom_labels = [
+    CustomLabel(name="chart", description="Bar charts, line charts, pie charts"),
+    CustomLabel(name="code_block", description="Source code snippets"),
+    CustomLabel(name="sidebar", description="Secondary content panels"),
+]
+
+# Detect with custom labels
+result = detector.extract(image, custom_labels=custom_labels)
+```
+
+### Text Extraction
+Convert document images to Markdown/HTML with VLM-powered extraction:
+
+| Model | Description | Backend | Notes |
+|-------|-------------|---------|-------|
+| **QwenTextExtractor** | High-accuracy VLM text extraction | PyTorch, VLLM, MLX, API | All backends tested |
+| **DotsOCRTextExtractor** | Layout-aware OCR with structure | VLLM ✅, API | **Use VLLM backend** |
+
+```python
+from omnidocs.tasks.text_extraction import QwenTextExtractor
+from omnidocs.tasks.text_extraction.qwen import QwenTextPyTorchConfig
+
+# Initialize extractor
+extractor = QwenTextExtractor(
+    backend=QwenTextPyTorchConfig(
+        model="Qwen/Qwen3-VL-8B-Instruct",
+        device="cuda",
+    )
+)
+
+# Extract text as markdown
+result = extractor.extract(image, output_format="markdown")
+print(result.content)  # Full markdown output
+
+# Or as HTML
+result = extractor.extract(image, output_format="html")
+```
+
+#### DotsOCR with Layout-Aware Extraction
+
+DotsOCR provides structured text extraction with layout information (recommended backend: **VLLM**):
+
+```python
+from omnidocs.tasks.text_extraction import DotsOCRTextExtractor
+from omnidocs.tasks.text_extraction.dotsocr import DotsOCRVLLMConfig
+
+# Initialize with VLLM backend (recommended)
+extractor = DotsOCRTextExtractor(
+    backend=DotsOCRVLLMConfig(
+        model="rednote-hilab/dots.ocr",
+        tensor_parallel_size=1,
+        gpu_memory_utilization=0.85,
+    )
+)
+
+# Extract with layout information
+result = extractor.extract(
+    image,
+    output_format="markdown",
+    include_layout=True,  # Include bounding boxes and categories
+)
+
+# Access extracted content
+print(result.content)  # Markdown output
+
+# Access layout elements
+for element in result.layout:
+    print(f"{element.category}: {element.bbox}")
+    if element.text:
+        print(f"  Text: {element.text[:50]}...")
+```
+
+
+### Multi-Backend Support
+All VLM-based extractors support multiple inference backends:
+
+```python
+# PyTorch (default, local GPU)
+from omnidocs.tasks.text_extraction.qwen import QwenTextPyTorchConfig
+config = QwenTextPyTorchConfig(model="Qwen/Qwen3-VL-8B-Instruct", device="cuda")
+
+# VLLM (high-throughput serving)
+from omnidocs.tasks.text_extraction.qwen import QwenTextVLLMConfig
+config = QwenTextVLLMConfig(model="Qwen/Qwen3-VL-8B-Instruct", tensor_parallel_size=2)
+
+# MLX (Apple Silicon)
+from omnidocs.tasks.text_extraction.qwen import QwenTextMLXConfig
+config = QwenTextMLXConfig(model="mlx-community/Qwen2.5-VL-7B-Instruct-8bit")
+
+# API (OpenRouter, etc.)
+from omnidocs.tasks.text_extraction.qwen import QwenTextAPIConfig
+config = QwenTextAPIConfig(model="qwen/qwen3-vl-8b-instruct", api_key="...")
+```
+
+### OCR Extraction
+Extract text with bounding boxes using multiple OCR engines:
+
+| Model | Description | Backend |
+|-------|-------------|---------|
+| **TesseractOCR** | Google's open-source OCR (100+ languages) | System |
+| **EasyOCR** | PyTorch-based OCR (80+ languages) | PyTorch |
+| **PaddleOCR** | PaddlePaddle OCR (CJK optimized) | PaddlePaddle |
+
+```python
+from omnidocs.tasks.ocr_extraction import TesseractOCR, TesseractOCRConfig
+from omnidocs.tasks.ocr_extraction import EasyOCR, EasyOCRConfig
+from omnidocs.tasks.ocr_extraction import PaddleOCR, PaddleOCRConfig
+
+# Tesseract OCR
+ocr = TesseractOCR(config=TesseractOCRConfig(languages=["eng"]))
+result = ocr.extract(image)
+
+# EasyOCR (GPU accelerated)
+ocr = EasyOCR(config=EasyOCRConfig(languages=["en"], gpu=True))
+result = ocr.extract(image)
+
+# PaddleOCR (excellent for Chinese/Japanese/Korean)
+ocr = PaddleOCR(config=PaddleOCRConfig(lang="ch", device="gpu"))
+result = ocr.extract(image)
+
+# Access results
+for block in result.text_blocks:
+    print(f"'{block.text}' @ {block.bbox.to_list()} (conf: {block.confidence:.2f})")
 ```
 
 ### Coming Soon
-- OCR Extraction (PaddleOCR, Tesseract, EasyOCR, SuryaOCR)
-- Text Extraction (PyMuPDF, PDFPlumber, Surya)
 - Table Extraction (TableTransformer, Camelot, Tabula)
 - Math Extraction (UniMERNet, SuryaMath)
+- Structured Output Extraction (Pydantic schemas)
 
 ---
 
@@ -162,8 +416,11 @@ uv run mkdocs serve
 
 ## Roadmap
 
-- [ ] OCR Extraction module
-- [ ] Text Extraction module
+- [x] Layout Extraction (DocLayoutYOLO, RT-DETR)
+- [x] VLM Layout Detection with Custom Labels (Qwen-VL)
+- [x] Text Extraction to Markdown/HTML (Qwen-VL)
+- [x] Multi-backend support (PyTorch, VLLM, MLX, API)
+- [x] OCR Extraction module (Tesseract, EasyOCR, PaddleOCR)
 - [ ] Table Extraction module
 - [ ] Math Expression Extraction module
 - [ ] Reading Order Detection
