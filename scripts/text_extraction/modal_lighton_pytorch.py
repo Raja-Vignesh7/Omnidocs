@@ -1,163 +1,118 @@
-# import os
-# os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+"""
+LightOnOCR-2-1B Inference on Modal
+Usage: modal run lighton_ocr_modal.py
+"""
 
-# import torch
-# from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
+import modal
+from pathlib import Path
 
-
-
-
-# def select_device() -> tuple[str, torch.dtype]:
-#     """
-#     Select the appropriate device and dtype for the model.
-#     Priority: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
-#     """
-#     if torch.backends.mps.is_available():
-#         device = "mps"
-#         dtype = torch.float32  # MPS performs better with float32
-#     elif torch.cuda.is_available():
-#         device = "cuda"
-#         dtype = torch.bfloat16  # CUDA supports bfloat16 for better efficiency
-#     else:
-#         device = "cpu"
-#         dtype = torch.float32
-    
-#     return device, dtype
-
-
-# def load_model(model_name: str = "lightonai/LightOnOCR-2-1B"):
-#     """Load the OCR model with appropriate dtype and device."""
-#     device, dtype = select_device()
-    
-#     print(f"Using device: {device} with dtype: {dtype}")
-    
-#     model = LightOnOcrForConditionalGeneration.from_pretrained(
-#         model_name,
-#         torch_dtype=dtype
-#     ).to(device)
-    
-#     # Set model to evaluation mode for inference
-#     model.eval()
-    
-#     processor = LightOnOcrProcessor.from_pretrained(model_name)
-    
-#     return model, processor, device, dtype
-
-
-# def extract_text_from_image(
-#     model: LightOnOcrForConditionalGeneration,
-#     processor: LightOnOcrProcessor,
-#     image_url: str,
-#     device: str,
-#     dtype: torch.dtype,
-#     max_new_tokens: int = 1024
-# ) -> str:
-#     """
-#     Extract text from an image using the OCR model.
-    
-#     Args:
-#         model: The loaded OCR model
-#         processor: The processor for the model
-#         image_url: URL of the image to process
-#         device: Device to run inference on
-#         dtype: Data type for model computation
-#         max_new_tokens: Maximum tokens to generate
-    
-#     Returns:
-#         Extracted text from the image
-#     """
-#     conversation = [
-#         {
-#             "role": "user",
-#             "content": [{"type": "image", "url": image_url}]
-#         }
-#     ]
-    
-#     # Prepare inputs
-#     inputs = processor.apply_chat_template(
-#         conversation,
-#         add_generation_prompt=True,
-#         tokenize=True,
-#         return_dict=True,
-#         return_tensors="pt",
-#     )
-    
-#     # Move inputs to device with appropriate dtype
-#     inputs = {
-#         k: v.to(device=device, dtype=dtype) if v.is_floating_point() else v.to(device)
-#         for k, v in inputs.items()
-#     }
-    
-#     # Inference with no_grad for memory efficiency
-#     with torch.no_grad():
-#         output_ids = model.generate(
-#             **inputs,
-#             max_new_tokens=max_new_tokens,
-#             do_sample=False,  # Use greedy decoding for consistency
-#         )
-    
-#     # Extract generated text (excluding input tokens)
-#     generated_ids = output_ids[0, inputs["input_ids"].shape[1]:]
-#     output_text = processor.decode(generated_ids, skip_special_tokens=True)
-    
-#     return output_text
-
-
-# def main():
-#     """Main function to demonstrate OCR extraction."""
-#     # Initialize model and processor
-#     model, processor, device, dtype = load_model()
-    
-#     # Example image URL
-#     url = "https://huggingface.co/datasets/hf-internal-testing/fixtures_ocr/resolve/main/SROIE-receipt.jpeg"
-    
-#     # Extract text from image
-#     print("Extracting text from image...")
-#     extracted_text = extract_text_from_image(
-#         model,
-#         processor,
-#         url,
-#         device,
-#         dtype,
-#         max_new_tokens=1024
-#     )
-    
-#     print("\nExtracted Text:")
-#     print(extracted_text)
-
-
-# if __name__ == "__main__":
-#     main()
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-import torch
-from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
-
-device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
-dtype = torch.float32 if device == "mps" else torch.bfloat16
-
-# model = LightOnOcrForConditionalGeneration.from_pretrained("lightonai/LightOnOCR-2-1B-ocr-soup", torch_dtype=dtype).to(device)
-# processor = LightOnOcrProcessor.from_pretrained("lightonai/LightOnOCR-2-1B-ocr-soup")
-
-model = LightOnOcrForConditionalGeneration.from_pretrained("lightonai/LightOnOCR-2-1B", torch_dtype=dtype).to(device)
-processor = LightOnOcrProcessor.from_pretrained("lightonai/LightOnOCR-2-1B")
-
-# url = "https://huggingface.co/datasets/hf-internal-testing/fixtures_ocr/resolve/main/SROIE-receipt.jpeg"
-url = "https://target.scene7.com/is/image/Target/ScreenShot2022-03-22at125438PM-220322-1647972511350?scl=1&qlt=80&fmt=png"
-
-conversation = [{"role": "user", "content": [{"type": "image", "url": url}]}]
-
-inputs = processor.apply_chat_template(
-    conversation,
-    add_generation_prompt=True,
-    tokenize=True,
-    return_dict=True,
-    return_tensors="pt",
+# CUDA 12.8 is the latest, but for compatibility with current torch builds 
+# on Modal, 12.4.0 is often more stable.
+IMAGE = (
+    modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.12")
+    .apt_install("git","libglib2.0-0", "libgl1", "libglx-mesa0")
+    .run_commands("pip install uv")
+    # Install the latest transformers (v5 candidate) + dependencies
+    .run_commands(
+        "uv pip install --system torch torchvision --index-url https://download.pytorch.org/whl/cu124",
+        "uv pip install --system pillow pypdfium2",
+        "uv pip install --system requests",
+        "uv pip install --system transformers>=5.0.0", # Ensures v5 support
+        "uv pip install --system huggingface_hub[hf_transfer] accelerate"
+    )
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
 )
-inputs = {k: v.to(device=device, dtype=dtype) if v.is_floating_point() else v.to(device) for k, v in inputs.items()}
 
-output_ids = model.generate(**inputs, max_new_tokens=1024)
-generated_ids = output_ids[0, inputs["input_ids"].shape[1]:]
-output_text = processor.decode(generated_ids, skip_special_tokens=True)
-print(output_text)
+app = modal.App("lighton-ocr-experiment")
+volume = modal.Volume.from_name("ocr-cache", create_if_missing=True)
+
+@app.function(
+    image=IMAGE,
+    gpu="A10G:1",
+    volumes={"/data": volume},
+    timeout=600,
+)
+def run_lighton_ocr(image_url: str):
+    import torch
+    from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
+    from PIL import Image
+    import requests
+    from io import BytesIO
+
+    model_id = "lightonai/LightOnOCR-2-1B"
+    device = "cuda"
+    dtype = torch.bfloat16
+
+    print(f"Loading {model_id}...")
+    processor = LightOnOcrProcessor.from_pretrained(
+    model_id,
+    trust_remote_code=True
+    )
+
+    model = LightOnOcrForConditionalGeneration.from_pretrained(
+    model_id,
+    torch_dtype=dtype,
+    trust_remote_code=True
+    ).to(device)
+
+    # Load image from URL
+    response = requests.get(image_url)
+    image = Image.open(BytesIO(response.content)).convert("RGB")
+
+    # The LightOn prompt usually expects a transcription instruction.  For image
+    # inputs we need a single content item where type is "image" and the actual
+    # PIL image is provided in the same dict.  Previously the type and image were
+    # split across separate dicts which meant the model never saw the image.
+    # conversation = [{
+    #     "role": "user",
+    #     "content": [
+    #         {"type": "url", "url": image_url}
+    #     ]
+    # }]
+    conversation = [{
+    "role": "user",
+    "content": [
+        {"type": "image", "image": image},
+        {"type": "text", "text": "Transcribe this document."}
+        ]
+    }]
+
+    print("Processing inputs...")
+    inputs = processor.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    
+    # Move to GPU and ensure correct dtypes
+    inputs = {k: v.to(device=device, dtype=dtype) if v.is_floating_point() else v.to(device) 
+              for k, v in inputs.items()}
+
+    print("Generating text...")
+    with torch.inference_mode():
+        output_ids = model.generate(**inputs, max_new_tokens=1024)
+    
+    # Slice output to remove the prompt tokens
+    generated_ids = output_ids[0, inputs["input_ids"].shape[1]:]
+    output_text = processor.decode(generated_ids, skip_special_tokens=True)
+    
+    return output_text
+
+@app.local_entrypoint()
+def main():
+    # target_url = "https://target.scene7.com/is/image/Target/ScreenShot2022-03-22at125438PM-220322-1647972511350?scl=1&qlt=80&fmt=png"
+    target_url = "https://huggingface.co/datasets/hf-internal-testing/fixtures_ocr/resolve/main/SROIE-receipt.jpeg"
+    result = run_lighton_ocr.remote(target_url)
+    print("\n" + "="*50)
+    print("OCR RESULT:")
+    print("="*50)
+    print(result)
+
+"""Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable
+higher rate limits and faster downloads. You are using a model of type mistral3 to instantiate a 
+model of type lighton_ocr. This may be expected if you are loading a checkpoint that shares a subset 
+of the architecture (e.g., loading a sam2_video checkpoint into Sam2Model), but is otherwise not 
+supported and can yield errors. Please verify that the checkpoint is compatible with the model you 
+are instantiating."""
