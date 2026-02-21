@@ -369,7 +369,12 @@ class RuleBasedReadingOrderPredictor(BaseReadingOrderPredictor):
                 continue
 
             # Find elements above that might precede in reading order
-            query_bbox = (elem_j.l - 0.1, elem_j.t, elem_j.r + 0.1, float("inf"))
+            query_bbox = (
+                elem_j.left - 0.1,
+                elem_j.top,
+                elem_j.right + 0.1,
+                float("inf"),
+            )
             candidates = list(spatial_idx.intersection(query_bbox))
 
             for i in candidates:
@@ -401,10 +406,10 @@ class RuleBasedReadingOrderPredictor(BaseReadingOrderPredictor):
         elem_j: _PageElement,
     ) -> bool:
         """Check if any element interrupts the reading sequence between i and j."""
-        x_min = min(elem_i.l, elem_j.l) - 1.0
-        x_max = max(elem_i.r, elem_j.r) + 1.0
-        y_min = elem_j.t
-        y_max = elem_i.b
+        x_min = min(elem_i.left, elem_j.left) - 1.0
+        x_max = max(elem_i.right, elem_j.right) + 1.0
+        y_min = elem_j.top
+        y_max = elem_i.bottom
 
         candidates = list(spatial_idx.intersection((x_min, y_min, x_max, y_max)))
 
@@ -436,19 +441,19 @@ class RuleBasedReadingOrderPredictor(BaseReadingOrderPredictor):
         th = self._horizontal_dilation_threshold_norm * page_elems[0].page_width
 
         for i, elem_i in enumerate(dilated_elems):
-            x0, y0, x1, y1 = elem_i.l, elem_i.b, elem_i.r, elem_i.t
+            x0, y0, x1, y1 = elem_i.left, elem_i.bottom, elem_i.right, elem_i.top
 
             if i in state.up_map and state.up_map[i]:
                 elem_up = page_elems[state.up_map[i][0]]
-                x0_dil = min(x0, elem_up.l)
-                x1_dil = max(x1, elem_up.r)
+                x0_dil = min(x0, elem_up.left)
+                x1_dil = max(x1, elem_up.right)
                 if (x0 - x0_dil) <= th and (x1_dil - x1) <= th:
                     x0, x1 = x0_dil, x1_dil
 
             if i in state.dn_map and state.dn_map[i]:
                 elem_dn = page_elems[state.dn_map[i][0]]
-                x0_dil = min(x0, elem_dn.l)
-                x1_dil = max(x1, elem_dn.r)
+                x0_dil = min(x0, elem_dn.left)
+                x1_dil = max(x1, elem_dn.right)
                 if (x0 - x0_dil) <= th and (x1_dil - x1) <= th:
                     x0, x1 = x0_dil, x1_dil
 
@@ -473,8 +478,8 @@ class RuleBasedReadingOrderPredictor(BaseReadingOrderPredictor):
             )
 
             if not overlaps:
-                dilated_elems[i].l = x0
-                dilated_elems[i].r = x1
+                dilated_elems[i].left = x0
+                dilated_elems[i].right = x1
 
         return dilated_elems
 

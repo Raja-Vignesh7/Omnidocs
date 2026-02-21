@@ -12,6 +12,7 @@ from PIL import Image
 from omnidocs.cache import add_reference, get_cache_key, get_cached, set_cached
 from omnidocs.tasks.text_extraction.base import BaseTextExtractor
 from omnidocs.tasks.text_extraction.models import OutputFormat, TextOutput
+from omnidocs.utils.cache import get_model_cache_dir
 
 if TYPE_CHECKING:
     from .api import GraniteDoclingTextAPIConfig
@@ -134,6 +135,7 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
             ) from e
 
         config = self.backend_config
+        cache_dir = get_model_cache_dir(config.cache_dir)
 
         # Resolve device
         if config.device == "cuda" and not torch.cuda.is_available():
@@ -146,6 +148,7 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
         # Model kwargs
         model_kwargs: dict[str, Any] = {
             "trust_remote_code": config.trust_remote_code,
+            "cache_dir": str(cache_dir),
         }
 
         if config.device_map:
@@ -159,7 +162,7 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
         if config.use_flash_attention:
             model_kwargs["attn_implementation"] = "flash_attention_2"
 
-        self._processor = AutoProcessor.from_pretrained(config.model)
+        self._processor = AutoProcessor.from_pretrained(config.model, cache_dir=str(cache_dir))
         self._backend = AutoModelForImageTextToText.from_pretrained(config.model, **model_kwargs)
 
         if config.device_map is None:
@@ -176,6 +179,10 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
             ) from e
 
         config = self.backend_config
+        cache_dir = get_model_cache_dir()
+
+        # Use config download_dir or default cache
+        download_dir = config.download_dir or str(cache_dir)
 
         llm_kwargs: dict[str, Any] = {
             "model": config.model,
@@ -186,10 +193,8 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
             "max_model_len": config.max_model_len,
             "disable_custom_all_reduce": config.disable_custom_all_reduce,
             "limit_mm_per_prompt": {"image": config.limit_mm_per_prompt},
+            "download_dir": download_dir,
         }
-
-        if config.download_dir:
-            llm_kwargs["download_dir"] = config.download_dir
 
         if config.enforce_eager:
             llm_kwargs["enforce_eager"] = True
@@ -211,7 +216,7 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
                 pass  # Older VLLM versions
 
         self._backend = LLM(**llm_kwargs)
-        self._processor = AutoProcessor.from_pretrained(config.model)
+        self._processor = AutoProcessor.from_pretrained(config.model, cache_dir=str(cache_dir))
         self._sampling_params_class = SamplingParams
 
     def _load_mlx_backend(self) -> None:
@@ -224,27 +229,21 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
             raise ImportError("MLX backend requires mlx and mlx-vlm. Install with: uv add mlx mlx-vlm") from e
 
         config = self.backend_config
+
+        # Set HF_HOME if cache_dir is specified (MLX respects HF_HOME)
+        if config.cache_dir:
+            import os
+
+            os.environ["HF_HOME"] = config.cache_dir
+
         self._backend, self._processor = load(config.model)
         self._mlx_config = load_config(config.model)
         self._apply_chat_template = apply_chat_template
         self._generate = generate
 
     def _load_api_backend(self) -> None:
-        """Load API backend for remote inference."""
-        try:
-            from openai import OpenAI
-        except ImportError as e:
-            raise ImportError("API backend requires openai. Install with: uv add openai") from e
-
-        config = self.backend_config
-        client_kwargs: dict[str, Any] = {
-            "base_url": config.base_url,
-            "api_key": config.api_key,
-        }
-        if config.extra_headers:
-            client_kwargs["default_headers"] = config.extra_headers
-
-        self._backend = OpenAI(**client_kwargs)
+        """Load API backend (litellm-based, no client to create)."""
+        pass
 
     def _convert_doctags_to_markdown(self, doctags: str, image: Image.Image) -> str:
         """Convert DocTags output to Markdown using docling_core."""
@@ -442,38 +441,21 @@ class GraniteDoclingTextExtractor(BaseTextExtractor):
                 os.unlink(temp_path)
 
     def _infer_api(self, image: Image.Image) -> str:
-        """API inference via OpenAI-compatible endpoint."""
-        import base64
-        from io import BytesIO
+        """API inference via litellm."""
+        from omnidocs.vlm import VLMAPIConfig, vlm_completion
 
         config = self.backend_config
-
-        # Encode image to base64
-        buffer = BytesIO()
-        image.save(buffer, format="PNG")
-        base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-        # Create request
-        response = self._backend.chat.completions.create(
+        vlm_config = VLMAPIConfig(
             model=config.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{base64_image}"},
-                        },
-                        {"type": "text", "text": GRANITE_DOCLING_PROMPT},
-                    ],
-                }
-            ],
+            api_key=config.api_key,
+            api_base=config.api_base,
             max_tokens=config.max_tokens,
             temperature=config.temperature,
             timeout=config.timeout,
+            api_version=config.api_version,
+            extra_headers=config.extra_headers,
         )
-
-        return response.choices[0].message.content
+        return vlm_completion(vlm_config, GRANITE_DOCLING_PROMPT, image)
 
     def _extract_plain_text(self, content: str) -> str:
         """Extract plain text from markdown content."""

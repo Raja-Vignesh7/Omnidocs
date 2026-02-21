@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import numpy as np
 from PIL import Image
 
+from omnidocs.utils.cache import get_model_cache_dir
+
 from ....cache import add_reference, get_cache_key, get_cached, set_cached
 from ..base import BaseLayoutExtractor
 from ..models import (
@@ -68,19 +70,6 @@ DEFAULT_LAYOUT_LABELS = [
 
 # Coordinate range used by Qwen3-VL (0-999 relative coordinates)
 QWEN_COORD_RANGE = 999
-
-
-def _get_model_cache_dir() -> Path:
-    """
-    Get model cache directory from environment or default.
-
-    Checks OMNIDOCS_MODEL_CACHE environment variable first,
-    falls back to ~/.omnidocs/models.
-    """
-    cache_dir = os.environ.get("OMNIDOCS_MODEL_CACHE", os.path.expanduser("~/.omnidocs/models"))
-    path = Path(cache_dir)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 class QwenLayoutDetector(BaseLayoutExtractor):
@@ -212,7 +201,7 @@ class QwenLayoutDetector(BaseLayoutExtractor):
             ) from e
 
         config = self.backend_config
-        cache_dir = _get_model_cache_dir()
+        cache_dir = get_model_cache_dir(config.cache_dir)
 
         # Resolve device
         device = self._resolve_device(config.device)
@@ -248,7 +237,7 @@ class QwenLayoutDetector(BaseLayoutExtractor):
             ) from e
 
         config = self.backend_config
-        cache_dir = _get_model_cache_dir()
+        cache_dir = get_model_cache_dir()
 
         # Use config download_dir or default cache
         download_dir = config.download_dir or str(cache_dir)
@@ -278,28 +267,18 @@ class QwenLayoutDetector(BaseLayoutExtractor):
 
         config = self.backend_config
 
+        # Set HF_HOME if cache_dir is specified (MLX respects HF_HOME)
+        if config.cache_dir:
+            os.environ["HF_HOME"] = config.cache_dir
+
         self._backend, self._processor = load(config.model)
         self._mlx_config = load_config(config.model)
         self._apply_chat_template = apply_chat_template
         self._generate = generate
 
     def _load_api_backend(self) -> None:
-        """Load API backend."""
-        try:
-            from openai import OpenAI
-        except ImportError as e:
-            raise ImportError("API backend requires openai. Install with: uv add openai") from e
-
-        config = self.backend_config
-
-        client_kwargs: Dict[str, Any] = {
-            "base_url": config.base_url,
-            "api_key": config.api_key,
-        }
-        if config.extra_headers:
-            client_kwargs["default_headers"] = config.extra_headers
-
-        self._backend = OpenAI(**client_kwargs)
+        """Load API backend (litellm-based, no client to create)."""
+        pass
 
     def _resolve_device(self, device: str) -> str:
         """Resolve device, auto-detecting if needed."""
@@ -611,32 +590,18 @@ class QwenLayoutDetector(BaseLayoutExtractor):
                 os.unlink(temp_path)
 
     def _infer_api(self, image: Image.Image, prompt: str) -> str:
-        """Run inference with API backend."""
-        import base64
-        import io
-
-        buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        image_url = f"data:image/png;base64,{img_base64}"
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
+        """Run inference with API backend via litellm."""
+        from omnidocs.vlm import VLMAPIConfig, vlm_completion
 
         config = self.backend_config
-        response = self._backend.chat.completions.create(
+        vlm_config = VLMAPIConfig(
             model=config.model,
-            messages=messages,
+            api_key=config.api_key,
+            api_base=config.api_base,
             max_tokens=config.max_tokens,
             temperature=config.temperature,
             timeout=config.timeout,
+            api_version=config.api_version,
+            extra_headers=config.extra_headers,
         )
-
-        return response.choices[0].message.content
+        return vlm_completion(vlm_config, prompt, image)
