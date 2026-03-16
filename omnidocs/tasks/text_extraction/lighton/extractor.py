@@ -1,7 +1,7 @@
 """LightOn text extractor with multi-backend support.
 
 LightOn OCR is optimized for document text extraction and recognition.
-Supports multiple backends: PyTorch, VLLM, MLX, and API.
+Supports multiple backends: PyTorch, VLLM, and MLX.
 """
 
 from pathlib import Path
@@ -10,11 +10,10 @@ from typing import TYPE_CHECKING, Literal, Union
 import numpy as np
 from PIL import Image
 
-from ....cache import add_reference, get_cache_key, get_cached
+from ....cache import add_reference, get_cache_key, get_cached, set_cached
 from ....utils.cache import get_model_cache_dir
 from ..base import BaseTextExtractor
 from ..models import OutputFormat, TextOutput
-from .utils import simple_post_process
 
 if TYPE_CHECKING:
     from .mlx import LightOnTextMLXConfig
@@ -27,6 +26,15 @@ LightOnTextBackendConfig = Union[
     "LightOnTextVLLMConfig",
     "LightOnTextMLXConfig",
 ]
+
+
+def _simple_post_process(text: str) -> str:
+    """Remove special tokens and clean up whitespace."""
+    for token in ["<|im_start|>", "<|im_end|>", "<|end_header_id|>"]:
+        text = text.replace(token, "")
+    text = text.strip()
+    lines = [line.strip() for line in text.split("\n")]
+    return "\n".join(line for line in lines if line)
 
 
 class LightOnTextExtractor(BaseTextExtractor):
@@ -74,6 +82,9 @@ class LightOnTextExtractor(BaseTextExtractor):
         self._client = None
         self._processor = None
         self._loaded = False
+        self._sampling_params_class = None
+        self._mlx_config = None
+        self._apply_chat_template = None
         self._load_model()
 
     def _load_model(self) -> None:
@@ -106,6 +117,11 @@ class LightOnTextExtractor(BaseTextExtractor):
             self._load_mlx_backend()
         else:
             raise TypeError(f"Unknown backend config: {config_type}")
+
+        if self._processor is not None:
+            set_cached(self._cache_key, (self._client, self._processor), owner=self)
+        else:
+            set_cached(self._cache_key, self._client, owner=self)
 
         self._loaded = True
 
@@ -167,28 +183,45 @@ class LightOnTextExtractor(BaseTextExtractor):
 
     def _load_vllm_backend(self) -> None:
         """Load VLLM backend."""
-        from llm_utils import VLLMClient
+        from transformers import AutoProcessor
+        from vllm import LLM, SamplingParams
 
         config = self.backend_config
-        self._client = VLLMClient(
-            model_name=config.model,
+        cache_dir = get_model_cache_dir()
+        download_dir = config.download_dir or str(cache_dir)
+
+        self._client = LLM(
+            model=config.model,
             tensor_parallel_size=config.tensor_parallel_size,
             gpu_memory_utilization=config.gpu_memory_utilization,
             max_model_len=config.max_model_len,
             trust_remote_code=config.trust_remote_code,
             enforce_eager=config.enforce_eager,
-            download_dir=config.download_dir,
+            download_dir=download_dir,
             disable_custom_all_reduce=config.disable_custom_all_reduce,
+            limit_mm_per_prompt={"image": 1},
         )
+        self._processor = AutoProcessor.from_pretrained(  # ← load once here
+            config.model,
+            cache_dir=str(cache_dir),
+        )
+        self._sampling_params_class = SamplingParams
 
     def _load_mlx_backend(self) -> None:
-        """Load MLX backend."""
         from mlx_vlm import load
+        from mlx_vlm.prompt_utils import apply_chat_template
+        from mlx_vlm.utils import load_config
 
         config = self.backend_config
-        print(f"Loading MLX model from {config.model}...")
-        model, processor = load(config.model, cache_dir=config.cache_dir)
+        if config.cache_dir:
+            import os
+
+            os.environ["HF_HOME"] = config.cache_dir
+
+        model, processor = load(config.model)
         self._client = _MLXClient(model, processor, config.max_tokens)
+        self._mlx_config = load_config(config.model)
+        self._apply_chat_template = apply_chat_template
 
     def extract(
         self,
@@ -224,7 +257,7 @@ class LightOnTextExtractor(BaseTextExtractor):
             raise TypeError(f"Unknown backend: {config_type}")
 
         # Post-process output
-        content = simple_post_process(raw_output)
+        content = _simple_post_process(raw_output)
 
         # Convert to desired format
         if output_format == "html":
@@ -280,39 +313,91 @@ class LightOnTextExtractor(BaseTextExtractor):
             )
 
         # Decode
+        generated_ids = output_ids[0, inputs["input_ids"].shape[1] :]
         raw_output = self._client.processor.decode(
-            output_ids[0],
-            skip_special_tokens=False,
+            generated_ids,
+            skip_special_tokens=True,
         )
 
         return raw_output
 
     def _extract_vllm(self, image: Image.Image) -> str:
         """Extract text using VLLM backend."""
-        # VLLM extraction
-        result = self._client.generate(image=image)
-        return result
+        from transformers import AutoProcessor
 
-    def _extract_mlx(self, image: Image.Image) -> str:
-        """Extract text using MLX backend."""
-        from mlx_vlm import generate
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": "Transcribe this document."},
+                ],
+            }
+        ]
 
-        prompt = "Transcribe this document."
-        response = generate(
-            model=self._client.model,
-            processor=self._client.processor,
-            prompt=prompt,
-            image=image,
-            max_tokens=self._client.max_tokens,
+        # Build prompt the same way PyTorch backend does
+        if self._processor is None:
+            cache_dir = get_model_cache_dir()
+            self._processor = AutoProcessor.from_pretrained(
+                self.backend_config.model,
+                cache_dir=str(cache_dir),
+            )
+
+        prompt = self._processor.apply_chat_template(
+            conversation,
+            tokenize=False,
+            add_generation_prompt=True,
         )
 
-        return response
+        sampling_params = self._sampling_params_class(
+            max_tokens=self.backend_config.max_tokens,
+            temperature=0.2,
+            top_p=0.9,
+        )
+
+        outputs = self._client.generate(
+            [{"prompt": prompt, "multi_modal_data": {"image": image}}],
+            sampling_params=sampling_params,
+        )
+
+        return outputs[0].outputs[0].text
+
+    def _extract_mlx(self, image: Image.Image) -> str:
+        import os
+        import tempfile
+
+        from mlx_vlm import generate
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            temp_path = f.name
+            image.save(f, format="PNG")
+
+        try:
+            prompt = self._apply_chat_template(
+                self._client.processor,
+                self._mlx_config,
+                "Transcribe this document.",
+                num_images=1,
+            )
+            result = generate(
+                self._client.model,
+                self._client.processor,
+                prompt,
+                [temp_path],
+                max_tokens=self._client.max_tokens,
+                verbose=False,
+            )
+            return result.text if hasattr(result, "text") else str(result)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     def _markdown_to_html(self, markdown_text: str) -> str:
         """Convert markdown to HTML (basic conversion)."""
-        # Basic markdown to HTML conversion
-        html = markdown_text.replace("\n", "<br>\n")
-        return f"<div>{html}</div>"
+        from html import escape
+
+        safe = escape(markdown_text).replace("\n", "<br>\n")
+        return f"<div>{safe}</div>"
 
     def _html_to_text(self, html_text: str) -> str:
         """Convert HTML to plain text."""
